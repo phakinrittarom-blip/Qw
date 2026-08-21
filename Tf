@@ -1,0 +1,597 @@
+-- โหลด Rayfield UI Library
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- Services & Variables
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
+local LocalPlayer = Players.LocalPlayer
+
+local SelectedTargets = {}
+local SelectedTPTarget = nil
+local FlingActive = false
+local CurrentSound = nil
+getgenv().OldPos = nil
+getgenv().FPDH = workspace.FallenPartsDestroyHeight
+
+-- ตัวแปรสำหรับระบบ Aimbot
+local AimActive = false
+local AimFOV = 150
+local AimSmoothness = 0.5
+local TargetPart = "Head"
+local Camera = workspace.CurrentCamera
+
+-- ตัวแปรสำหรับระบบ ESP
+local HighlightESP = false
+local NameESP = false
+local ESPConnections = {}
+
+-- สร้างวงกลม FOV แบบ Drawing (ล็อกกลางจอ)
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 1.5
+FOVCircle.Color = Color3.fromRGB(255, 0, 0)
+FOVCircle.Filled = false
+FOVCircle.Transparency = 0.7
+FOVCircle.NumSides = 60
+FOVCircle.Visible = false
+
+-- ระบบส่งการแจ้งเตือน
+local function Notify(title, content, duration)
+    Rayfield:Notify({
+        Title = title,
+        Content = content,
+        Duration = duration or 3,
+        Image = 4483362458
+    })
+end
+
+-- ฟังก์ชัน Fling
+local function SkidFling(TargetPlayer)
+    local Character = LocalPlayer.Character
+    local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+    local RootPart = Humanoid and Humanoid.RootPart
+    local TCharacter = TargetPlayer.Character
+    if not TCharacter then return end
+    
+    local THumanoid = TCharacter:FindFirstChildOfClass("Humanoid")
+    local TRootPart = THumanoid and THumanoid.RootPart
+    local THead = TCharacter:FindFirstChild("Head")
+    local Accessory = TCharacter:FindFirstChildOfClass("Accessory")
+    local Handle = Accessory and Accessory:FindFirstChild("Handle")
+
+    if Character and Humanoid and RootPart then
+        if RootPart.Velocity.Magnitude < 50 then
+            getgenv().OldPos = RootPart.CFrame
+        end
+        
+        if THumanoid and THumanoid.Sit then
+            return Notify("Error", TargetPlayer.Name .. " กำลังนั่งอยู่", 2)
+        end
+        
+        if THead then workspace.CurrentCamera.CameraSubject = THead
+        elseif Handle then workspace.CurrentCamera.CameraSubject = Handle
+        elseif THumanoid and TRootPart then workspace.CurrentCamera.CameraSubject = THumanoid end
+        
+        if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
+        
+        local FPos = function(BasePart, Pos, Ang)
+            RootPart.CFrame = CFrame.new(BasePart.Position) * Pos * Ang
+            Character:SetPrimaryPartCFrame(CFrame.new(BasePart.Position) * Pos * Ang)
+            RootPart.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
+            RootPart.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+        end
+        
+        local SFBasePart = function(BasePart)
+            local TimeToWait = 2
+            local Time = tick()
+            local Angle = 0
+            repeat
+                if RootPart and THumanoid then
+                    if BasePart.Velocity.Magnitude < 50 then
+                        Angle = Angle + 100
+                        FPos(BasePart, CFrame.new(0, 1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle),0 ,0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
+                        task.wait()
+                    else
+                        FPos(BasePart, CFrame.new(0, 1.5, THumanoid.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0))
+                        task.wait()
+                        FPos(BasePart, CFrame.new(0, -1.5, -THumanoid.WalkSpeed), CFrame.Angles(0, 0, 0))
+                        task.wait()
+                    end
+                end
+            until Time + TimeToWait < tick() or not FlingActive
+        end
+        
+        workspace.FallenPartsDestroyHeight = 0/0
+        
+        local BV = Instance.new("BodyVelocity")
+        BV.Parent = RootPart
+        BV.Velocity = Vector3.new(0, 0, 0)
+        BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        
+        Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+        
+        if TRootPart then SFBasePart(TRootPart)
+        elseif THead then SFBasePart(THead)
+        elseif Handle then SFBasePart(Handle)
+        end
+        
+        BV:Destroy()
+        Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+        workspace.CurrentCamera.CameraSubject = Humanoid
+        
+        if getgenv().OldPos then
+            repeat
+                RootPart.CFrame = getgenv().OldPos * CFrame.new(0, .5, 0)
+                Character:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, .5, 0))
+                Humanoid:ChangeState("GettingUp")
+                for _, part in pairs(Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity, part.RotVelocity = Vector3.new(), Vector3.new()
+                    end
+                end
+                task.wait()
+            until (RootPart.Position - getgenv().OldPos.p).Magnitude < 25
+            workspace.FallenPartsDestroyHeight = getgenv().FPDH
+        end
+    end
+end
+
+-- ฟังก์ชันค้นหาผู้เล่นที่ใกล้ศูนย์กลางหน้าจอมากที่สุดสำหรับ Aimbot
+local function GetClosestPlayerToCenter()
+    local Closest = nil
+    local ShortestDistance = AimFOV
+    local ScreenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(TargetPart) then
+            local pos, onScreen = Camera:WorldToViewportPoint(player.Character[TargetPart].Position)
+            if onScreen then
+                local targetPos = Vector2.new(pos.X, pos.Y)
+                local dist = (targetPos - ScreenCenter).Magnitude
+                if dist < ShortestDistance then
+                    Closest = player.Character[TargetPart]
+                    ShortestDistance = dist
+                end
+            end
+        end
+    end
+    return Closest
+end
+
+-- Loop การทำงานของ Aimbot & FOV Circle
+RunService.RenderStepped:Connect(function()
+    local ScreenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Position = ScreenCenter
+    FOVCircle.Radius = AimFOV
+
+    if AimActive and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        local Target = GetClosestPlayerToCenter()
+        if Target then
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, Target.Position), AimSmoothness)
+        end
+    end
+end)
+
+-- ฟังก์ชันสร้าง BillboardGui สำหรับ Name ESP
+local function CreateNameTag(player)
+    if player == LocalPlayer or not player.Character then return end
+    
+    local head = player.Character:FindFirstChild("Head")
+    if not head then return end
+    
+    if head:FindFirstChild("PhakinNameTag") then
+        head.PhakinNameTag:Destroy()
+    end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "PhakinNameTag"
+    billboard.Adornee = head
+    billboard.Size = UDim2.new(0, 150, 0, 40)
+    billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+    billboard.AlwaysOnTop = true
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Parent = billboard
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Size = UDim2.new(1, 0, 1, 0)
+    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextSize = 14
+    nameLabel.Text = player.Name
+
+    billboard.Parent = head
+
+    local conn = RunService.RenderStepped:Connect(function()
+        if NameESP and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local dist = math.floor((LocalPlayer.Character.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude)
+            nameLabel.Text = string.format("%s\n[%d studs]", player.Name, dist)
+        else
+            billboard:Destroy()
+        end
+    end)
+    table.insert(ESPConnections, conn)
+end
+
+-- สร้างหน้าต่าง Rayfield UI
+local Window = Rayfield:CreateWindow({
+   Name = "PHAKIN HUB",
+   LoadingTitle = "กำลังโหลด Phakin Hub...",
+   LoadingSubtitle = "by Phakin",
+   ConfigurationSaving = { Enabled = false },
+   KeySystem = false
+})
+
+local function GetPlayerList()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            table.insert(list, p.Name)
+        end
+    end
+    return list
+end
+
+-- ==================== TAB 1: COMBAT / AIMBOT ====================
+local CombatTab = Window:CreateTab("Combat / Aimbot", 4483362458)
+
+CombatTab:CreateToggle({
+   Name = "เปิดใช้งาน Aimbot (คลิกขวาค้างเพื่อล็อก)",
+   CurrentValue = false,
+   Flag = "AimbotToggle",
+   Callback = function(Value)
+      AimActive = Value
+      FOVCircle.Visible = Value
+   end,
+})
+
+CombatTab:CreateSlider({
+   Name = "ระยะวงกลมเล็ง (FOV Radius)",
+   Range = {50, 500},
+   Increment = 10,
+   CurrentValue = 150,
+   Callback = function(Value)
+      AimFOV = Value
+   end,
+})
+
+CombatTab:CreateSlider({
+   Name = "ความเนียนในการล็อก (Smoothness)",
+   Range = {1, 10},
+   Increment = 1,
+   CurrentValue = 5,
+   Callback = function(Value)
+      AimSmoothness = Value / 10
+   end,
+})
+
+CombatTab:CreateDropdown({
+   Name = "ตำแหน่งที่ต้องการล็อก (Target Part)",
+   Options = {"Head", "HumanoidRootPart"},
+   CurrentOption = {"Head"},
+   MultipleOptions = false,
+   Callback = function(Option)
+      TargetPart = Option[1]
+   end,
+})
+
+-- ==================== TAB 2: FLING CONTROL ====================
+local FlingTab = Window:CreateTab("Fling Control", 4483362458)
+
+local FlingToggle = FlingTab:CreateToggle({
+   Name = "เริ่มทำงาน Fling (Start Fling)",
+   CurrentValue = false,
+   Flag = "FlingToggle",
+   Callback = function(Value)
+      FlingActive = Value
+      if FlingActive then
+         if #SelectedTargets == 0 then
+            Notify("เตือน", "กรุณาเลือกเป้าหมายอย่างน้อย 1 คน", 2)
+            return
+         end
+         
+         Notify("เริ่มทำงาน", "กำลัง Fling ผู้เล่นที่เลือก...", 2)
+         task.spawn(function()
+            while FlingActive do
+               for _, playerName in ipairs(SelectedTargets) do
+                  local targetPlayer = Players:FindFirstChild(playerName)
+                  if targetPlayer and FlingActive then
+                     SkidFling(targetPlayer)
+                     task.wait(0.1)
+                  end
+               end
+               task.wait(0.5)
+            end
+         end)
+      else
+         Notify("หยุดทำงาน", "ยกเลิกการ Fling แล้ว", 2)
+      end
+   end,
+})
+
+local PlayerDropdown = FlingTab:CreateDropdown({
+   Name = "เลือกเป้าหมาย (Select Targets)",
+   Options = GetPlayerList(),
+   CurrentOption = {},
+   MultipleOptions = true,
+   Flag = "TargetsDropdown",
+   Callback = function(Options)
+      SelectedTargets = Options
+   end,
+})
+
+FlingTab:CreateButton({
+   Name = "รีเฟรชรายชื่อผู้เล่น (Refresh Player List)",
+   Callback = function()
+      PlayerDropdown:Set(GetPlayerList())
+      Notify("สำเร็จ", "อัปเดตรายชื่อผู้เล่นเรียบร้อย", 2)
+   end,
+})
+
+-- ==================== TAB 3: BASIC PLAYER ====================
+local BasicTab = Window:CreateTab("Basic Player", 4483362458)
+
+BasicTab:CreateSlider({
+   Name = "ความเร็วการเดิน (WalkSpeed)",
+   Range = {16, 250},
+   Increment = 1,
+   Suffix = "Speed",
+   CurrentValue = 16,
+   Callback = function(Value)
+      if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+         LocalPlayer.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = Value
+      end
+   end,
+})
+
+BasicTab:CreateSlider({
+   Name = "พลังกระโดด (JumpPower)",
+   Range = {50, 500},
+   Increment = 1,
+   Suffix = "Power",
+   CurrentValue = 50,
+   Callback = function(Value)
+      if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+         LocalPlayer.Character:FindFirstChildOfClass("Humanoid").UseJumpPower = true
+         LocalPlayer.Character:FindFirstChildOfClass("Humanoid").JumpPower = Value
+      end
+   end,
+})
+
+BasicTab:CreateToggle({
+   Name = "กระโดดรวดเร็ว/กลางอากาศ (Infinite Jump)",
+   CurrentValue = false,
+   Callback = function(Value)
+      _G.InfiniteJump = Value
+   end,
+})
+
+UserInputService.JumpRequest:Connect(function()
+    if _G.InfiniteJump and LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+        LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState("Jumping")
+    end
+end)
+
+local NoclipConnection
+BasicTab:CreateToggle({
+   Name = "เดินทะลุกำแพง (Noclip)",
+   CurrentValue = false,
+   Callback = function(Value)
+      if Value then
+         NoclipConnection = RunService.Stepped:Connect(function()
+            if LocalPlayer.Character then
+               for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                  if part:IsA("BasePart") and part.CanCollide then
+                     part.CanCollide = false
+                  end
+               end
+            end
+         end)
+      else
+         if NoclipConnection then
+            NoclipConnection:Disconnect()
+         end
+      end
+   end,
+})
+
+BasicTab:CreateButton({
+   Name = "รีเซ็ตตัวละคร (Reset Character)",
+   Callback = function()
+      if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+         LocalPlayer.Character:FindFirstChildOfClass("Humanoid").Health = 0
+      end
+   end,
+})
+
+-- ==================== TAB 4: VISUALS & ESP ====================
+local VisualsTab = Window:CreateTab("Visuals / ESP", 4483362458)
+
+VisualsTab:CreateToggle({
+   Name = "เปิดระบบกล่องเรืองแสง (ESP Box / Highlight)",
+   CurrentValue = false,
+   Callback = function(Value)
+      HighlightESP = Value
+      for _, player in ipairs(Players:GetPlayers()) do
+         if player ~= LocalPlayer and player.Character then
+            if HighlightESP then
+               local highlight = player.Character:FindFirstChild("PhakinESP") or Instance.new("Highlight")
+               highlight.Name = "PhakinESP"
+               highlight.FillColor = Color3.fromRGB(255, 0, 0)
+               highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+               highlight.FillTransparency = 0.5
+               highlight.OutlineTransparency = 0
+               highlight.Parent = player.Character
+            else
+               if player.Character:FindFirstChild("PhakinESP") then
+                  player.Character.PhakinESP:Destroy()
+               end
+            end
+         end
+      end
+   end,
+})
+
+VisualsTab:CreateToggle({
+   Name = "เปิดแสดงชื่อและระยะทาง (ESP Name & Distance)",
+   CurrentValue = false,
+   Callback = function(Value)
+      NameESP = Value
+      if NameESP then
+         for _, player in ipairs(Players:GetPlayers()) do
+            CreateNameTag(player)
+         end
+      else
+         for _, conn in ipairs(ESPConnections) do
+            conn:Disconnect()
+         end
+         ESPConnections = {}
+         for _, player in ipairs(Players:GetPlayers()) do
+            if player.Character and player.Character:FindFirstChild("Head") and player.Character.Head:FindFirstChild("PhakinNameTag") then
+               player.Character.Head.PhakinNameTag:Destroy()
+            end
+         end
+      end
+   end,
+})
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        task.wait(1)
+        if NameESP then
+            CreateNameTag(player)
+        end
+    end)
+end)
+
+-- ==================== TAB 5: TELEPORT ====================
+local TeleportTab = Window:CreateTab("Teleport", 4483362458)
+
+local TPDropdown = TeleportTab:CreateDropdown({
+   Name = "เลือกผู้เล่นเพื่อวาร์ปหา",
+   Options = GetPlayerList(),
+   CurrentOption = {},
+   MultipleOptions = false,
+   Callback = function(Option)
+      SelectedTPTarget = Option[1]
+   end,
+})
+
+TeleportTab:CreateButton({
+   Name = "วาร์ปไปหาผู้เล่น (Teleport to Player)",
+   Callback = function()
+      if SelectedTPTarget then
+         local target = Players:FindFirstChild(SelectedTPTarget)
+         if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+               LocalPlayer.Character.HumanoidRootPart.CFrame = target.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, -3)
+               Notify("สำเร็จ", "วาร์ปไปหา " .. SelectedTPTarget .. " แล้ว", 2)
+            end
+         end
+      else
+         Notify("เตือน", "กรุณาเลือกผู้เล่นก่อน", 2)
+      end
+   end,
+})
+
+TeleportTab:CreateButton({
+   Name = "รีเฟรชรายชื่อวาร์ป",
+   Callback = function()
+      TPDropdown:Set(GetPlayerList())
+   end,
+})
+
+-- ==================== TAB 6: EXTRA FEATURES ====================
+local ExtraTab = Window:CreateTab("Extra Features", 4483362458)
+
+-- 1. เล่นเพลงด้วย Sound ID
+local InputMusicID = ""
+ExtraTab:CreateInput({
+   Name = "ใส่ Sound ID เพลง",
+   PlaceholderText = "เช่น 1838615763",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(Text)
+      InputMusicID = Text
+   end,
+})
+
+ExtraTab:CreateButton({
+   Name = "เปิดเพลง (Play Music)",
+   Callback = function()
+      if InputMusicID == "" then
+         Notify("เตือน", "กรุณากรอก Sound ID ก่อน", 2)
+         return
+      end
+      
+      if CurrentSound then
+         CurrentSound:Destroy()
+      end
+      
+      local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+      local root = char:FindFirstChild("HumanoidRootPart")
+      
+      if root then
+         CurrentSound = Instance.new("Sound")
+         CurrentSound.Name = "PhakinMusic"
+         CurrentSound.SoundId = "rbxassetid://" .. InputMusicID
+         CurrentSound.Volume = 2
+         CurrentSound.Looped = true
+         CurrentSound.Parent = root
+         CurrentSound:Play()
+         Notify("สำเร็จ", "กำลังเล่นเพลง ID: " .. InputMusicID, 3)
+      end
+   end,
+})
+
+ExtraTab:CreateButton({
+   Name = "หยุดเพลง (Stop Music)",
+   Callback = function()
+      if CurrentSound then
+         CurrentSound:Stop()
+         CurrentSound:Destroy()
+         CurrentSound = nil
+         Notify("สำเร็จ", "หยุดเล่นเพลงแล้ว", 2)
+      end
+   end,
+})
+
+-- 2. เปลี่ยนร่าง R6/R15
+ExtraTab:CreateButton({
+   Name = "แปลงเป็น R6 (และรีเซ็ตตัวละคร)",
+   Callback = function()
+      Notify("กำลังทำงาน", "กำลังสลับโครงสร้างเป็น R6...", 2)
+      local char = LocalPlayer.Character
+      if char and char:FindFirstChildOfClass("Humanoid") then
+         loadstring(game:HttpGet("https://raw.githubusercontent.com/zxciaz/UniversalR6/main/Script"))()
+         task.wait(0.5)
+         char:FindFirstChildOfClass("Humanoid").Health = 0
+      end
+   end,
+})
+
+ExtraTab:CreateButton({
+   Name = "แปลงเป็น R15 (และรีเซ็ตตัวละคร)",
+   Callback = function()
+      Notify("กำลังทำงาน", "กำลังสลับโครงสร้างเป็น R15...", 2)
+      local char = LocalPlayer.Character
+      if char and char:FindFirstChildOfClass("Humanoid") then
+         loadstring(game:HttpGet("https://raw.githubusercontent.com/zxciaz/UniversalR15/main/Script"))()
+         task.wait(0.5)
+         char:FindFirstChildOfClass("Humanoid").Health = 0
+      end
+   end,
+})
+
+-- 3. ระบบจัดการเซิร์ฟเวอร์
+ExtraTab:CreateButton({
+   Name = "เข้าเซิร์ฟเวอร์เดิมใหม่ (Rejoin Server)",
+   Callback = function()
+      TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+   end,
+})
+
+Notify("ยินดีต้อนรับ", "PHAKIN HUB โหลดเสร็จสมบูรณ์!", 3)
