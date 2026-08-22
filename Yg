@@ -1,0 +1,90 @@
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("RunService")
+local LP = Players.LocalPlayer
+
+-- GUI Setup
+local main = Instance.new("ScreenGui", LP:WaitForChild("PlayerGui"))
+main.Name, main.ResetOnSpawn = "FlyGui", false
+
+local Frame = Instance.new("Frame", main)
+Frame.Size, Frame.Position = UDim2.new(0, 190, 0, 57), UDim2.new(0.1, 0, 0.4, 0)
+Frame.BackgroundColor3, Frame.Active, Frame.Draggable = Color3.fromRGB(40, 40, 40), true, true
+
+local function CreateBtn(name, text, pos, size, bg)
+    local b = Instance.new("TextButton", Frame)
+    b.Name, b.Text, b.Position, b.Size = name, text, pos, size
+    b.BackgroundColor3, b.TextColor3, b.Font = bg, Color3.new(1,1,1), Enum.Font.SourceSansBold
+    return b
+end
+
+local up = CreateBtn("up", "UP", UDim2.new(0,0,0,0), UDim2.new(0,44,0,28), Color3.fromRGB(0,170,120))
+local down = CreateBtn("down", "DN", UDim2.new(0,0,0.5,0), UDim2.new(0,44,0,28), Color3.fromRGB(170,120,0))
+local plus = CreateBtn("plus", "+", UDim2.new(0.24,0,0,0), UDim2.new(0,44,0,28), Color3.fromRGB(80,80,200))
+local mine = CreateBtn("mine", "-", UDim2.new(0.24,0,0.5,0), UDim2.new(0,44,0,28), Color3.fromRGB(200,80,80))
+local onof = CreateBtn("onof", "FLY", UDim2.new(0.72,0,0.5,0), UDim2.new(0,50,0,28), Color3.fromRGB(200,170,0))
+local close = CreateBtn("close", "X", UDim2.new(0,0,-0.5,0), UDim2.new(0,44,0,25), Color3.fromRGB(200,0,0))
+
+local spdLabel = Instance.new("TextLabel", Frame)
+spdLabel.Size, spdLabel.Position = UDim2.new(0,44,0,28), UDim2.new(0.48,0,0.5,0)
+spdLabel.Text, spdLabel.TextColor3, spdLabel.BackgroundColor3 = "1", Color3.new(1,1,1), Color3.fromRGB(60,60,60)
+
+-- Fly System variables
+local flying, speed, upping, downed = false, 1, false, false
+local ctrl = {f = 0, b = 0, l = 0, r = 0}
+local bv, bg
+
+-- Controls
+UIS.InputBegan:Connect(function(i, g)
+    if g then return end
+    if i.KeyCode == Enum.KeyCode.W then ctrl.f = 1 end
+    if i.KeyCode == Enum.KeyCode.S then ctrl.b = -1 end
+    if i.KeyCode == Enum.KeyCode.A then ctrl.l = -1 end
+    if i.KeyCode == Enum.KeyCode.D then ctrl.r = 1 end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.KeyCode == Enum.KeyCode.W then ctrl.f = 0 end
+    if i.KeyCode == Enum.KeyCode.S then ctrl.b = 0 end
+    if i.KeyCode == Enum.KeyCode.A then ctrl.l = 0 end
+    if i.KeyCode == Enum.KeyCode.D then ctrl.r = 0 end
+end)
+
+-- Fly Logic
+onof.MouseButton1Click:Connect(function()
+    flying = not flying
+    onof.BackgroundColor3 = flying and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(200, 170, 0)
+    
+    local char = LP.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then return end
+
+    if flying then
+        hum.PlatformStand = true
+        bv, bg = Instance.new("BodyVelocity", root), Instance.new("BodyGyro", root)
+        bv.MaxForce, bv.Velocity = Vector3.new(9e9, 9e9, 9e9), Vector3.zero
+        bg.MaxTorque, bg.P = Vector3.new(9e9, 9e9, 9e9), 9e4
+
+        task.spawn(function()
+            while flying do
+                RS.RenderStepped:Wait()
+                local cam = workspace.CurrentCamera.CFrame
+                bg.CFrame = cam
+                local moveDir = (cam.LookVector * (ctrl.f + ctrl.b)) + (cam.RightVector * (ctrl.l + ctrl.r))
+                bv.Velocity = moveDir * (speed * 50)
+            end
+            bv:Destroy() bg:Destroy()
+            hum.PlatformStand = false
+        end)
+    end
+end)
+
+-- Buttons Events
+up.MouseButton1Down:Connect(function() upping = true task.spawn(function() while upping do task.wait() local r = LP.Character:FindFirstChild("HumanoidRootPart") if r then r.CFrame *= CFrame.new(0, 1, 0) end end end) end)
+up.MouseButton1Up:Connect(function() upping = false end)
+down.MouseButton1Down:Connect(function() downed = true task.spawn(function() while downed do task.wait() local r = LP.Character:FindFirstChild("HumanoidRootPart") if r then r.CFrame *= CFrame.new(0, -1, 0) end end end) end)
+down.MouseButton1Up:Connect(function() downed = false end)
+
+plus.MouseButton1Click:Connect(function() speed += 1 spdLabel.Text = tostring(speed) end)
+mine.MouseButton1Click:Connect(function() speed = math.max(1, speed - 1) spdLabel.Text = tostring(speed) end)
+close.MouseButton1Click:Connect(function() main:Destroy() end)
